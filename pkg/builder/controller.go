@@ -17,12 +17,17 @@ limitations under the License.
 package builder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/conversion"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	clientcache "k8s.io/client-go/tools/cache"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -71,6 +76,7 @@ type ForInput struct {
 	object           client.Object
 	predicates       []predicate.Predicate
 	objectProjection objectProjection
+	metadataFilter   metadataFilter
 	err              error
 }
 
@@ -97,6 +103,7 @@ type OwnsInput struct {
 	object           client.Object
 	predicates       []predicate.Predicate
 	objectProjection objectProjection
+	metadataFilter   metadataFilter
 }
 
 // Owns defines types of Objects being *generated* by the ControllerManagedBy, and configures the ControllerManagedBy to respond to
@@ -118,6 +125,7 @@ type WatchesInput struct {
 	eventhandler     handler.EventHandler
 	predicates       []predicate.Predicate
 	objectProjection objectProjection
+	metadataFilter   metadataFilter
 }
 
 // Watches exposes the lower-level ControllerManagedBy Watches functions through the builder.  Consider using
@@ -216,6 +224,73 @@ func (blder *Builder) project(obj client.Object, proj objectProjection) (client.
 	}
 }
 
+// Finds the SharedIndexInformer used for the given source, and installs
+// an object preprocessor to strip specified fields before objects are stored
+// in the Store, or broadcasted to listeners.
+func (blder *Builder) installMetadataFilterForKindSource(kind *source.Kind, filter *metadataFilter) {
+	if filter == nil {
+		return
+	}
+
+	// Get the SharedIndexInformer for the specified source type
+	informerMap := kind.GetCache()
+	i, lastErr := informerMap.GetInformer(context.Background(), kind.Type)
+
+	if lastErr != nil {
+		return
+	}
+
+	if sharedI, ok := i.(clientcache.SharedIndexInformer); ok {
+		stripFieldsOne := func(object runtime.Object) {
+			accessor, err := meta.Accessor(object)
+
+			if err != nil {
+				return
+			}
+
+			if filter.RemoveAnnotations {
+				accessor.SetAnnotations(nil)
+			}
+
+			if filter.RemoveManagedFields {
+				accessor.SetManagedFields(nil)
+			}
+		}
+
+		stripFields := func(object runtime.Object) {
+			if meta.IsListType(object) {
+				// If the given object is a list, iterate through its Items
+				// and apply the transformation to each individual object
+				itemsPtr, err := meta.GetItemsPtr(object)
+				if err != nil {
+					return
+				}
+
+				items, err := conversion.EnforcePtr(itemsPtr)
+				if err != nil {
+					return
+				}
+
+				for i := 0; i < items.Len(); i++ {
+					raw := items.Index(i)
+					if obj, ok := raw.Interface().(runtime.Object); ok {
+						stripFieldsOne(obj)
+					}
+				}
+
+			} else {
+				stripFieldsOne(object)
+			}
+		}
+
+		sharedI.SetPreprocessHandler(func(object interface{}) {
+			if view, ok := object.(runtime.Object); ok {
+				stripFields(view)
+			}
+		})
+	}
+}
+
 func (blder *Builder) doWatch() error {
 	// Reconcile type
 	typeForSrc, err := blder.project(blder.forInput.object, blder.forInput.objectProjection)
@@ -228,6 +303,9 @@ func (blder *Builder) doWatch() error {
 	if err := blder.ctrl.Watch(src, hdler, allPredicates...); err != nil {
 		return err
 	}
+
+	// Must be called after Watch which populates the source's cache
+	blder.installMetadataFilterForKindSource(src, &blder.forInput.metadataFilter)
 
 	// Watches the managed types
 	for _, own := range blder.ownsInput {
@@ -245,6 +323,9 @@ func (blder *Builder) doWatch() error {
 		if err := blder.ctrl.Watch(src, hdler, allPredicates...); err != nil {
 			return err
 		}
+
+		// Must be called after Watch which populates the source's cache
+		blder.installMetadataFilterForKindSource(src, &own.metadataFilter)
 	}
 
 	// Do the watch requests
@@ -264,6 +345,13 @@ func (blder *Builder) doWatch() error {
 		if err := blder.ctrl.Watch(w.src, w.eventhandler, allPredicates...); err != nil {
 			return err
 		}
+
+		if srckind, ok := w.src.(*source.Kind); ok {
+			// We can only apply projections to source.Kind types
+			// Must be called after Watch which populates the source's cache
+			blder.installMetadataFilterForKindSource(srckind, &w.metadataFilter)
+		}
+
 	}
 	return nil
 }
