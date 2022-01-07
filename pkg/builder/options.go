@@ -115,3 +115,55 @@ var (
 )
 
 // }}}
+
+// {{{ Metadata Filter Options
+
+type metadataFilter struct {
+	RemoveManagedFields bool
+	RemoveAnnotations   bool
+}
+
+type metadataFilterInjectorFunc func(*metadataFilter)
+
+// ApplyToFor applies this configuration to the given ForInput options.
+func (p metadataFilterInjectorFunc) ApplyToFor(opts *ForInput) {
+	p(&opts.metadataFilter)
+}
+
+// ApplyToOwns applies this configuration to the given OwnsInput options.
+func (p metadataFilterInjectorFunc) ApplyToOwns(opts *OwnsInput) {
+	p(&opts.metadataFilter)
+}
+
+// ApplyToWatches applies this configuration to the given WatchesInput options.
+func (p metadataFilterInjectorFunc) ApplyToWatches(opts *WatchesInput) {
+	p(&opts.metadataFilter)
+}
+
+var (
+	// WithoutManagedFields informs the cache that managedFields are not required
+	// to be stored, so they will be removed before being stored in the cache.
+	// If multiple controllers watch the same GVK with the same source type,
+	// then managedFields are stripped if the last constructed controller
+	// requested it.
+	WithoutManagedFields = metadataFilterInjectorFunc(func(filter *metadataFilter) { filter.RemoveManagedFields = true })
+
+	// WithoutAnnotations informs the cache that annotations metadata are not
+	// required to be stored, so they will be removed before being stored in
+	// the cache.
+	//
+	// If multiple controllers watch the same GVK with the same source type,
+	// then annotations are stripped if the last constructed controller
+	// requested it.
+	WithoutAnnotations = metadataFilterInjectorFunc(func(filter *metadataFilter) { filter.RemoveAnnotations = true })
+
+	_ ForOption     = WithoutManagedFields
+	_ OwnsOption    = WithoutManagedFields
+	_ WatchesOption = WithoutManagedFields
+
+	_ ForOption     = WithoutAnnotations
+	_ OwnsOption    = WithoutAnnotations
+	_ WatchesOption = WithoutAnnotations
+)
+
+// }}}

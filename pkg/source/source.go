@@ -102,6 +102,10 @@ type Kind struct {
 
 var _ SyncingSource = &Kind{}
 
+func (ks *Kind) GetCache() cache.Cache {
+	return ks.cache
+}
+
 // Start is internal and should be called only by the Controller to register an EventHandler with the Informer
 // to enqueue reconcile.Requests.
 func (ks *Kind) Start(ctx context.Context, handler handler.EventHandler, queue workqueue.RateLimitingInterface,

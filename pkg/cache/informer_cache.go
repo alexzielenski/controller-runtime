@@ -57,7 +57,7 @@ func (ip *informerCache) Get(ctx context.Context, key client.ObjectKey, out clie
 		return err
 	}
 
-	started, cache, err := ip.InformersMap.Get(ctx, gvk, out)
+	started, cache, err := ip.InformersMap.Get(ctx, gvk, out, nil)
 	if err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func (ip *informerCache) List(ctx context.Context, out client.ObjectList, opts .
 		return err
 	}
 
-	started, cache, err := ip.InformersMap.Get(ctx, *gvk, cacheTypeObj)
+	started, cache, err := ip.InformersMap.Get(ctx, *gvk, cacheTypeObj, nil)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func (ip *informerCache) GetInformerForKind(ctx context.Context, gvk schema.Grou
 		return nil, err
 	}
 
-	_, i, err := ip.InformersMap.Get(ctx, gvk, obj)
+	_, i, err := ip.InformersMap.Get(ctx, gvk, obj, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -146,12 +146,18 @@ func (ip *informerCache) GetInformerForKind(ctx context.Context, gvk schema.Grou
 
 // GetInformer returns the informer for the obj.
 func (ip *informerCache) GetInformer(ctx context.Context, obj client.Object) (Informer, error) {
+	return ip.GetInformerOrCreateWithTransformerIfNecessary(ctx, obj, nil)
+}
+
+type ObjectTransformerFunc internal.ObjectTransformerFunc
+
+func (ip *informerCache) GetInformerOrCreateWithTransformerIfNecessary(ctx context.Context, obj client.Object, transformer ObjectTransformerFunc) (Informer, error) {
 	gvk, err := apiutil.GVKForObject(obj, ip.Scheme)
 	if err != nil {
 		return nil, err
 	}
 
-	_, i, err := ip.InformersMap.Get(ctx, gvk, obj)
+	_, i, err := ip.InformersMap.Get(ctx, gvk, obj, internal.ObjectTransformerFunc(transformer))
 	if err != nil {
 		return nil, err
 	}
